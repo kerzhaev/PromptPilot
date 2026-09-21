@@ -252,6 +252,17 @@
     flex-shrink: 0;
     font-family: var(--mono);
   }
+  .role-chip {
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 10px;
+    font-weight: 700;
+    white-space: nowrap;
+    flex-shrink: 0;
+    letter-spacing: 0.3px;
+  }
+  .role-review { color: #ce93d8; border: 1px solid rgba(206, 147, 216, 0.45); }
+  .role-exec { color: #80cbc4; border: 1px solid rgba(128, 203, 196, 0.45); }
   .task-schedule {
     font-size: 11px;
     color: var(--yellow);
@@ -1066,6 +1077,13 @@ async function loadTasks() {
     const taskWfChip = taskWf
       ? `<span class="wf-chip" style="border-color:${taskWfColor};color:${taskWfColor}" title="воркфлоу ${escAttr(taskWf.slug)}">${esc(taskWf.slug)}</span>`
       : '';
+    // Роль задачи: ревьюерские промпты всегда несут AUDIT-контракт или слово
+    // «аудитор» (вшито и планировщиком, и нашими шаблонами) — остальное
+    // считаем исполнением.
+    const isReviewRole = /AUDIT_VERDICT|AUDIT_FINDINGS|независимый аудитор/i.test((t.prompt || '').slice(0, 1500));
+    const roleChip = isReviewRole
+      ? '<span class="role-chip role-review" title="задача ревьюера">ревью</span>'
+      : '<span class="role-chip role-exec" title="задача исполнителя">исполнение</span>';
 
     // Build result section
     let resultHTML = '';
@@ -1094,6 +1112,7 @@ async function loadTasks() {
       <div class="task-header" onclick="toggleTask(${t.id})">
         <span class="task-id">#${t.id}</span>
         ${taskWfChip}
+        ${roleChip}
         <span class="task-status" data-s="${t.status}">${taskStatusLabel(t)}</span>
         <span class="task-prompt" title="${escAttr(taskDisplayTitle(t))}">${esc(taskDisplayTitle(t))}</span>
         ${t.working_dir ? `<span class="task-meta">📁 ${esc(t.working_dir.split(/[/\\]/).filter(Boolean).pop() || t.working_dir)}</span>` : ''}
