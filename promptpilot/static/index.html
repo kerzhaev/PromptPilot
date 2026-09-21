@@ -242,6 +242,16 @@
     font-family: var(--mono);
     white-space: nowrap;
   }
+  .wf-chip {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+    flex-shrink: 0;
+    font-family: var(--mono);
+  }
   .task-schedule {
     font-size: 11px;
     color: var(--yellow);
@@ -1013,10 +1023,26 @@ function taskDisplayTitle(t) {
   return firstLine ? firstLine.trim() : `Task #${t.id}`;
 }
 
+// Workflow chip: deterministic color per workflow slug + dir→slug lookup.
+function wfSlugColor(slug) {
+  let h = 0;
+  for (let i = 0; i < slug.length; i++) h = (h * 31 + slug.charCodeAt(i)) % 360;
+  return `hsl(${h}, 70%, 62%)`;
+}
+
 async function loadTasks() {
   const params = currentFilter ? `?status=${currentFilter}&limit=100` : '?limit=100';
   const tasks = await fetchJSON(`${API}/tasks${params}`);
   const list = document.getElementById('taskList');
+
+  // Workflow chip: match a task's working_dir to a workflow's repository_path
+  // (unique per workflow) so tasks of parallel workflows are distinguishable.
+  // workflowCache is only filled when the Workflows modal was opened — fetch
+  // it lazily here too; chips appear on the next refresh tick.
+  if (!(workflowCache || []).length) loadWorkflows();
+  const wfByDir = new Map((workflowCache || [])
+    .filter(w => w.repository_path)
+    .map(w => [w.repository_path, w.slug]));
 
   if (!tasks.length) {
     list.innerHTML = `<div class="empty">
@@ -1034,6 +1060,12 @@ async function loadTasks() {
     const expanded = t.id === expandedId;
     const time = timeAgo(t.created_at);
     const parsed = parseResult(t.result);
+    const taskWf = (workflowCache || []).find(w => w.repository_path && t.working_dir &&
+      w.repository_path.toLowerCase() === t.working_dir.toLowerCase());
+    const taskWfColor = taskWf ? wfSlugColor(taskWf.slug) : null;
+    const taskWfChip = taskWf
+      ? `<span class="wf-chip" style="border-color:${taskWfColor};color:${taskWfColor}" title="воркфлоу ${escAttr(taskWf.slug)}">${esc(taskWf.slug)}</span>`
+      : '';
 
     // Build result section
     let resultHTML = '';
@@ -1058,9 +1090,10 @@ async function loadTasks() {
     }
 
     return `
-    <div class="task-row${expanded ? ' expanded' : ''}">
+    <div class="task-row${expanded ? ' expanded' : ''}"${taskWfColor ? ` style="border-left:3px solid ${taskWfColor}"` : ''}>
       <div class="task-header" onclick="toggleTask(${t.id})">
         <span class="task-id">#${t.id}</span>
+        ${taskWfChip}
         <span class="task-status" data-s="${t.status}">${taskStatusLabel(t)}</span>
         <span class="task-prompt" title="${escAttr(taskDisplayTitle(t))}">${esc(taskDisplayTitle(t))}</span>
         ${t.working_dir ? `<span class="task-meta">📁 ${esc(t.working_dir.split(/[/\\]/).filter(Boolean).pop() || t.working_dir)}</span>` : ''}
