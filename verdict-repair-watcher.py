@@ -368,5 +368,14 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    sys.stdout.reconfigure(encoding="utf-8")
+    # Под pythonw (без консоли) stdout/stderr == None — печатать некуда.
+    # Весь вывод всё равно дублируется в лог-файл, мусор отправляем в devnull.
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    else:
+        sys.stdout.reconfigure(encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    else:
+        sys.stderr.reconfigure(encoding="utf-8")
     main()
