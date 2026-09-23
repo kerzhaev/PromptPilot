@@ -1,0 +1,97 @@
+﻿# PromptPilot start-all — поднимает ВСЮ систему одним запуском (идемпотентно:
+# каждый компонент стартует только если его ещё нет). Можно запускать повторно.
+# Компоненты:
+#   1. PromptPilot сервер + воркер   (start.ps1, порт 8420)
+#   2. SSH-туннель до KZ-сервера     (SOCKS 127.0.0.1:10811, для Telegram)
+#   3. Telegram-бот @PromtPilotBot   (через туннель)
+#   4. Verdict-Repair Watcher        (TypeSafe Jev: авто-починка вердиктов
+#                                     + таймаут-авторезюме, лимит 2/задача)
+#   5. Queued-Nudger                 (пинок queued-воркфлоу, баг resume-not-noticed)
+
+$ErrorActionPreference = 'Continue'
+$PpDir    = 'C:\Users\Nachfin\Desktop\Projets\Other\PromptPilot'
+$Pem      = 'C:\Users\Nachfin\Desktop\Projets\VPN\vpn-almaty.pem'
+$KzServer = 'root@85.198.88.68'
+$Socks    = 10811
+
+function Test-Port([int]$Port) {
+    [bool](Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+}
+function Test-CmdLine([string]$Pattern) {
+    [bool](Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" |
+        Where-Object { $_.CommandLine -match $Pattern })
+}
+function Start-HiddenConsole([string]$Exe, [string]$ArgList, [string]$WorkDir) {
+    Start-Process -FilePath $Exe -ArgumentList $ArgList `
+        -WorkingDirectory $WorkDir -WindowStyle Hidden
+}
+
+Write-Host '=== PromptPilot start-all ===' -ForegroundColor Cyan
+
+# 1. Server + worker
+$healthy = $false
+try {
+    $s = Invoke-RestMethod 'http://127.0.0.1:8420/api/worker/status' -TimeoutSec 2
+    $healthy = ($s.state -eq 'online')
+} catch {}
+if ($healthy) {
+    Write-Host '[1] PromptPilot server+worker: already online' -ForegroundColor Green
+} else {
+    Write-Host '[1] PromptPilot: running start.ps1...'
+    & (Join-Path $PpDir 'start.ps1') | Out-Null
+    Start-Sleep -Seconds 8
+    try {
+        $s = Invoke-RestMethod 'http://127.0.0.1:8420/api/worker/status' -TimeoutSec 2
+        if ($s.state -eq 'online') { Write-Host '[1] PromptPilot: online' -ForegroundColor Green }
+        else { Write-Host ('[1] PromptPilot: ' + $s.state) -ForegroundColor Red }
+    } catch {
+        Write-Host '[1] PromptPilot: NOT RESPONDING - run PromptPilot-Start.bat manually' -ForegroundColor Red
+    }
+}
+
+# 2. SSH tunnel (Telegram)
+if (Test-Port $Socks) {
+    Write-Host '[2] SSH tunnel KZ: already up' -ForegroundColor Green
+} else {
+    Write-Host '[2] Raising SSH tunnel...'
+    Start-Process -WindowStyle Hidden -FilePath 'ssh' -ArgumentList @(
+        '-i', $Pem, '-N', '-D', "$Socks",
+        '-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=3',
+        '-o', 'ExitOnForwardFailure=yes', '-o', 'BatchMode=yes', $KzServer)
+    Start-Sleep -Seconds 6
+    if (Test-Port $Socks) { Write-Host '[2] Tunnel up' -ForegroundColor Green }
+    else { Write-Host '[2] Tunnel FAILED (TG bot will be offline)' -ForegroundColor Yellow }
+}
+
+# 3. Telegram bot
+if (Test-CmdLine 'promptpilot bot') {
+    Write-Host '[3] Telegram bot: already running' -ForegroundColor Green
+} elseif (Test-Port $Socks) {
+    Start-HiddenConsole 'powershell.exe' '-NoProfile -ExecutionPolicy Bypass -Command "$env:ALL_PROXY=''socks5h://127.0.0.1:10811''; $env:HTTPS_PROXY=''socks5h://127.0.0.1:10811''; & ''C:\Users\Nachfin\Desktop\Projets\Other\PromptPilot\.venv\Scripts\python.exe'' -m promptpilot bot"' $PpDir
+    Write-Host '[3] Telegram bot started (hidden)' -ForegroundColor Green
+} else {
+    Write-Host '[3] Telegram bot: skipped - no tunnel' -ForegroundColor Yellow
+}
+
+# 4. Verdict-Repair Watcher (TypeSafe Jev)
+if (Test-CmdLine 'verdict-repair-watcher') {
+    Write-Host '[4] Verdict-Repair Watcher: already running' -ForegroundColor Green
+} else {
+    Start-HiddenConsole 'C:\Python314\pythonw.exe' '-X utf8 "C:\Users\Nachfin\Desktop\Projets\Other\PromptPilot\verdict-repair-watcher.py"' $PpDir
+    Start-Sleep -Seconds 3
+    if (Test-CmdLine 'verdict-repair-watcher') {
+        Write-Host '[4] Verdict-Repair Watcher started (hidden)' -ForegroundColor Green
+    } else {
+        Write-Host '[4] Watcher FAILED - see ~/.promptpilot/verdict-repair.log' -ForegroundColor Red
+    }
+}
+
+# 5. Queued-Nudger
+if (Test-CmdLine 'queued-nudger') {
+    Write-Host '[5] Queued-Nudger: already running' -ForegroundColor Green
+} else {
+    Start-HiddenConsole 'C:\Python314\python.exe' '-X utf8 "C:\Users\Nachfin\Desktop\Projets\Other\PromptPilot\queued-nudger.py"' $PpDir
+    Write-Host '[5] Queued-Nudger started (hidden)' -ForegroundColor Green
+}
+
+Write-Host '=== Done. Logs: ~/.promptpilot/*.log ===' -ForegroundColor Cyan
