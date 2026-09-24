@@ -879,6 +879,7 @@ def _execute_task_inner(task):
     # Poll instead of blocking: allows user-requested cancellation of a
     # RUNNING task (Web UI/bot) and the per-task timeout.
     started = time.monotonic()
+    forced_success = False
     while True:
         try:
             proc.wait(timeout=2)
@@ -898,6 +899,7 @@ def _execute_task_inner(task):
                 stdout_thread.join(timeout=10)
                 stderr_thread.join(timeout=10)
                 print("  -> HOTFIX: provider finished (task_complete) but did not close stdout; completing")
+                forced_success = True
                 break  # выходим в штатную обработку выхода (как при proc.wait)
             if db.is_cancel_requested(task.id):
                 _stop_owned_process(tree)
@@ -932,6 +934,12 @@ def _execute_task_inner(task):
     stderr = "".join(stderr_parts)
 
     result = subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+    if forced_success and result.returncode != 0:
+        # HOTFIX (bookapp): task_complete уже получен — работа завершена; exit
+        # ненулевой только потому, что дерево добито из-за незакрытого stdout.
+        # Вердикт парсим из собранного вывода как при штатном завершении.
+        print("  -> HOTFIX: forced completion after task_complete; ignoring kill exit code")
+        result.returncode = 0
 
     # A rate/usage limit can land on stderr, or — for stream-json CLIs like
     # Claude Code — inside the stdout result event with a non-zero exit. Check
