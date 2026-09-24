@@ -263,6 +263,24 @@
   }
   .role-review { color: #ce93d8; border: 1px solid rgba(206, 147, 216, 0.45); }
   .role-exec { color: #80cbc4; border: 1px solid rgba(128, 203, 196, 0.45); }
+  .cz-card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    background: var(--surface);
+  }
+  .cz-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+    flex-wrap: wrap;
+  }
+  .cz-label { font-weight: 600; font-size: 12px; }
+  .cz-label-sm { font-size: 11px; color: var(--text2); }
+  .cz-hint { font-size: 11px; color: var(--text2); margin-left: auto; }
+  .cz-inline { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
   .task-schedule {
     font-size: 11px;
     color: var(--yellow);
@@ -1040,6 +1058,184 @@ function wfSlugColor(slug) {
   for (let i = 0; i < slug.length; i++) h = (h * 31 + slug.charCodeAt(i)) % 360;
   return `hsl(${h}, 70%, 62%)`;
 }
+
+// ── Каскад ревью: визуальный редактор цепочки (config.review_chain) ──
+
+function cascadeEditorHTML(wf) {
+  const chain = (wf.config && wf.config.review_chain) || { enabled: false, steps: [] };
+  const steps = chain.steps || [];
+  const provOpts = (selected) =>
+    workflowProviderOptions(selected || '', false)
+      .replace('<option value="" selected>', '<option value="">');
+
+  const stepCard = (s, i) => {
+    const fixer = s.fixer || 'executor';
+    const customFixer = !['executor', 'self'].includes(fixer);
+    const win = s.window || {};
+    return `<div class="cz-card" data-cz-slot="${i}">
+      <div class="cz-row">
+        <span class="cz-label">Ревью-сту­пень ${i + 1}</span>
+        <select id="cz-prov-${i}" class="cz-prov">${provOpts(s.provider)}</select>
+        <button class="btn btn-sm btn-danger" onclick="czRemoveStep(${i})">✕</button>
+      </div>
+      <div class="cz-row">
+        <label class="cz-inline"><input type="checkbox" id="cz-blocking-${i}" ${s.blocking !== false ? 'checked' : ''}> блокирующая</label>
+        <label class="cz-inline">раунды: <input type="number" id="cz-rounds-${i}" min="1" max="10" value="${s.max_rounds || 2}" style="width:44px"></label>
+        <select id="cz-exhaust-${i}" class="cz-exhaust">
+          ${['arbitrate_planner', 'accept_if_gate_green', 'human'].map(p =>
+            `<option value="${p}" ${s.on_exhaust === p ? 'selected' : ''}>${{arbitrate_planner:'исчерпан → арбитраж планером', accept_if_gate_green:'исчерпан → принять при зелёном гейте', human:'исчерпан → человеку'}[p]}</option>`).join('')}
+        </select>
+      </div>
+      <div class="cz-row">
+        <span class="cz-label-sm">Находки чинит:</span>
+        <select id="cz-fixer-${i}" class="cz-fixer" onchange="czFixerChanged(${i})">
+          <option value="executor" ${fixer === 'executor' ? 'selected' : ''}>исполнитель воркфлоу</option>
+          <option value="self" ${fixer === 'self' ? 'selected' : ''}>этот же провайдер</option>
+          <option value="custom" ${customFixer ? 'selected' : ''}>указать:</option>
+        </select>
+        <select id="cz-fixer-custom-${i}" style="display:${customFixer ? '' : 'none'}">${provOpts(customFixer ? fixer : '')}</select>
+      </div>
+      <div class="cz-row">
+        <label class="cz-inline"><input type="checkbox" id="cz-window-en-${i}" ${win.from ? 'checked' : ''} onchange="czWindowChanged(${i})"> ⏰ только в окне</label>
+        <span id="cz-window-times-${i}" style="display:${win.from ? '' : 'none'}">
+          с <input type="time" id="cz-from-${i}" value="${win.from || '22:00'}" style="width:70px">
+          до <input type="time" id="cz-to-${i}" value="${win.to || '04:00'}" style="width:70px">
+        </span>
+      </div>
+    </div>`;
+  };
+
+  const stepCards = steps.map(stepCard).join('');
+  const addBtn = steps.length < 4
+    ? `<button class="btn btn-sm btn-ghost" onclick="czAddStep()">+ Добавить ступень</button>` : '';
+
+  return `<div class="cz-editor">
+    <div class="cz-row">
+      <label class="cz-inline"><input type="checkbox" id="cz-enabled" ${chain.enabled ? 'checked' : ''}> каскад включён (иначе — обычный один ревьюер)</label>
+      <span class="cz-hint">поток: ревью-1 → … → ревью-N → закрытие этапа</span>
+    </div>
+    <div id="cz-steps">${stepCards}</div>
+    <div class="cz-row">
+      ${addBtn}
+      <button class="btn btn-sm btn-primary" onclick="czSave()">Сохранить каскад</button>
+      <span class="cz-hint">настройка действует с ближайшего диспетча; движок: cascade-review.py</span>
+    </div>
+  </div>`;
+}
+
+function czCollectSteps() {
+  const steps = [];
+  document.querySelectorAll('#cz-steps .cz-card').forEach(card => {
+    const i = card.dataset.czSlot;
+    const provider = document.getElementById(`cz-prov-${i}`)?.value || '';
+    if (!provider) return;
+    const fixerSel = document.getElementById(`cz-fixer-${i}`);
+    const fixerCustom = document.getElementById(`cz-fixer-custom-${i}`);
+    let fixer = fixerSel ? fixerSel.value : 'executor';
+    if (fixer === 'custom' && fixerCustom) fixer = fixerCustom.value || 'executor';
+    const step = {
+      slot: steps.length + 1,
+      provider,
+      fixer,
+      blocking: document.getElementById(`cz-blocking-${i}`)?.checked !== false,
+      max_rounds: parseInt(document.getElementById(`cz-rounds-${i}`)?.value, 10) || 2,
+      on_exhaust: document.getElementById(`cz-exhaust-${i}`)?.value || 'arbitrate_planner',
+    };
+    if (document.getElementById(`cz-window-en-${i}`)?.checked) {
+      step.window = {
+        from: document.getElementById(`cz-from-${i}`)?.value || '22:00',
+        to: document.getElementById(`cz-to-${i}`)?.value || '04:00',
+        tz_offset_hours: 3,
+      };
+    }
+    steps.push(step);
+  });
+  return steps;
+}
+
+async function czSave() {
+  const chain = {
+    enabled: document.getElementById('cz-enabled')?.checked !== false,
+    steps: czCollectSteps(),
+  };
+  if (chain.enabled && !chain.steps.length) {
+    toast('Каскад включён, но ступеней нет — добавьте ступень или снимите галочку.');
+    return;
+  }
+  const cfg = JSON.parse(JSON.stringify(selectedWorkflowData.config));
+  cfg.review_chain = chain;
+  try {
+    await fetchJSON(`${API}/workflows/${selectedWorkflowId}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config: cfg, expected_version: selectedWorkflowData.state_version }),
+    });
+    toast('Каскад сохранён — действует с ближайшего диспетча.', false);
+    await loadWorkflows();
+  } catch (e) {
+    toast('Сохранение каскада: ' + e.message);
+  }
+}
+
+function czAddStep() {
+  const stepsBox = document.getElementById('cz-steps');
+  if (!stepsBox) return;
+  const i = stepsBox.querySelectorAll('.cz-card').length;
+  stepsBox.insertAdjacentHTML('beforeend', cascadeStepCardBlank(i));
+}
+
+function cascadeStepCardBlank(i) {
+  const provOpts = workflowProviderOptions('', false)
+    .replace('<option value="" selected>', '<option value="" selected>— выберите провайдера —</option>');
+  return `<div class="cz-card" data-cz-slot="${i}">
+    <div class="cz-row">
+      <span class="cz-label">Ревью-ступень ${i + 1}</span>
+      <select id="cz-prov-${i}" class="cz-prov">${provOpts}</select>
+      <button class="btn btn-sm btn-danger" onclick="czRemoveStep(${i})">✕</button>
+    </div>
+    <div class="cz-row">
+      <label class="cz-inline"><input type="checkbox" id="cz-blocking-${i}" checked> блокирующая</label>
+      <label class="cz-inline">раунды: <input type="number" id="cz-rounds-${i}" min="1" max="10" value="2" style="width:44px"></label>
+      <select id="cz-exhaust-${i}" class="cz-exhaust">
+        <option value="arbitrate_planner">исчерпан → арбитраж планером</option>
+        <option value="accept_if_gate_green">исчерпан → принять при зелёном гейте</option>
+        <option value="human">исчерпан → человеку</option>
+      </select>
+    </div>
+    <div class="cz-row">
+      <span class="cz-label-sm">Находки чинит:</span>
+      <select id="cz-fixer-${i}" class="cz-fixer">
+        <option value="executor">исполнитель воркфлоу</option>
+        <option value="self">этот же провайдер</option>
+      </select>
+    </div>
+    <div class="cz-row">
+      <label class="cz-inline"><input type="checkbox" id="cz-window-en-${i}"> ⏰ только в окне</label>
+      <span id="cz-window-times-${i}" style="display:none">
+        с <input type="time" id="cz-from-${i}" value="22:00" style="width:70px">
+        до <input type="time" id="cz-to-${i}" value="04:00" style="width:70px">
+      </span>
+    </div>
+  </div>`;
+}
+
+function czRemoveStep(i) {
+  const card = document.querySelector(`#cz-steps .cz-card[data-cz-slot="${i}"]`);
+  if (card) card.remove();
+  // Перенумеровать data-cz-slot, чтобы czCollectSteps читал актуальный порядок
+  document.querySelectorAll('#cz-steps .cz-card').forEach((c, idx) => c.dataset.czSlot = idx);
+}
+
+function czFixerChanged(i) {
+  const sel = document.getElementById(`cz-fixer-custom-${i}`);
+  if (sel) sel.style.display = document.getElementById(`cz-fixer-${i}`).value === 'custom' ? '' : 'none';
+}
+
+function czWindowChanged(i) {
+  const box = document.getElementById(`cz-window-times-${i}`);
+  if (box) box.style.display = document.getElementById(`cz-window-en-${i}`).checked ? '' : 'none';
+}
+
+// ── Каскад ревью: конец ──
 
 async function loadTasks() {
   const params = currentFilter ? `?status=${currentFilter}&limit=100` : '?limit=100';
@@ -2265,6 +2461,9 @@ function renderWorkflowDetail(wf, rounds, runs, events, findings, plan, stages, 
       </div>` : ''}
     <div class="wf-section-title">История завершённых раундов</div>
     <div class="wf-history">${historyRows || '<div class="wf-meta">Истории пока нет.</div>'}</div>
+    <details class="wf-technical" data-wf-detail="cascade-editor"><summary>⚙ Каскад ревью — настройка цепочки</summary>
+      ${cascadeEditorHTML(wf)}
+    </details>
     <details class="wf-technical" data-wf-detail="technical-log"><summary>Технический журнал · ${events.length} событий · state version ${wf.state_version}</summary>
       <div class="wf-history">${eventRows || '<div class="wf-meta">Событий пока нет.</div>'}</div>
     </details>`;
