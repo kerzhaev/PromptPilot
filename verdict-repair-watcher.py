@@ -376,8 +376,38 @@ def silence_guard(state: dict) -> None:
         killed = [x for x in out.stdout.split() if x.strip().isdigit()]
         GUARD_KILLS[guard_key] = GUARD_KILLS.get(guard_key, 0) + 1
         log(f"СТРАЖ: задача #{task_id} mmx-m3 молчит {int(age)//60} мин "
-            f"(сессия {os.path.basename(newest)[:40]}) → codex убит ({','.join(killed)}), "
-            f"воркер закроет задачу failed → следующий цикл даст timeout-style resume")
+            f"(сессия {os.path.basename(newest)[:40]}) → codex убит ({','.join(killed)})")
+        # Воркер пометит failed через пару секунд; сами делаем resume (как
+        # timeout-resume), чтобы петля замкнулась без человека.
+        time.sleep(12)
+        wf_rows = None
+        conn2 = db_connect()
+        try:
+            wf_rows = conn2.execute(
+                "SELECT id, status, state_version FROM workflows WHERE status='awaiting_human'"
+            ).fetchall()
+        finally:
+            conn2.close()
+        for wf_id, wf_status, wf_version in wf_rows:
+            note = (f"(авто-resume: страж убил зависший mmx-m3 процесса задачи #{task_id}; "
+                    f"молчание {int(age)//60} мин)")
+            body = {"expected_version": wf_version,
+                    "text": RESUME_TEXT + "\n\n" + note,
+                    "resume": True}
+            for attempt in (1, 2):
+                try:
+                    api(f"/api/workflows/{wf_id}/human-input", "POST", body)
+                    log(f"  >>> GUARD-RESUME отправлен: {wf_id} продолжен")
+                    break
+                except urllib.error.HTTPError as e:
+                    if e.code == 409 and attempt == 1:
+                        try:
+                            w2 = api(f"/api/workflows/{wf_id}")
+                            body["expected_version"] = w2["state_version"]
+                        except Exception:
+                            pass
+                        continue
+                    log(f"  guard-resume не прошёл: HTTP {e.code}")
 
 
 def main() -> None:
