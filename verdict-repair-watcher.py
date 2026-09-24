@@ -383,9 +383,9 @@ def silence_guard(state: dict) -> None:
         wf_rows = None
         conn2 = db_connect()
         try:
-            wf_rows = conn2.execute(
+            wf_rows = [r for r in conn2.execute(
                 "SELECT id, status, state_version FROM workflows WHERE status='awaiting_human'"
-            ).fetchall()
+            ).fetchall() if r[0] not in DEAD_WORKFLOWS]
         finally:
             conn2.close()
         for wf_id, wf_status, wf_version in wf_rows:
