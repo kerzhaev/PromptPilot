@@ -94,4 +94,35 @@ if (Test-CmdLine 'queued-nudger') {
     Write-Host '[5] Queued-Nudger started (hidden)' -ForegroundColor Green
 }
 
+
+# 6. Авто-Продолжить: все воркфлоу в awaiting_human получают resume+sync
+Write-Host '[6] Авто-Продолжить воркфлоу...' -ForegroundColor Cyan
+try {
+    $wfs = Invoke-RestMethod 'http://127.0.0.1:8420/api/workflows' -TimeoutSec 5
+    $resumed = @()
+    foreach ($w in $wfs) {
+        if ($w.status -ne 'awaiting_human') { continue }
+        try {
+            Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8420/api/workflows/$($w.id)/human-input" -ContentType 'application/json' -Body (@{expected_version=$w.state_version; text='Продолжить работу с учётом сохранённого состояния'; resume=$true} | ConvertTo-Json) -TimeoutSec 15 | Out-Null
+            $resumed += $w.slug
+            Write-Host ("    " + $w.slug + ": продолжен") -ForegroundColor Green
+        } catch {
+            Write-Host ("    " + $w.slug + ": resume отклонён") -ForegroundColor Yellow
+        }
+    }
+    Start-Sleep -Seconds 6
+    # queued после resume — sync-пинок (воркер мог не заметить)
+    foreach ($w in $wfs) {
+        if ($w.status -ne 'awaiting_human') { continue }
+        try {
+            $fresh = Invoke-RestMethod "http://127.0.0.1:8420/api/workflows/$($w.id)" -TimeoutSec 5
+            if ($fresh.status -eq 'queued') {
+                Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8420/api/workflows/$($w.id)/sync" -ContentType 'application/json' -Body (@{expected_version=$fresh.state_version} | ConvertTo-Json) -TimeoutSec 15 | Out-Null
+                Write-Host ("    " + $w.slug + ": sync-пинок") -ForegroundColor Green
+            }
+        } catch {}
+    }
+    if ($resumed.Count -eq 0) { Write-Host '    Ожидающих человека воркфлоу нет' }
+} catch { Write-Host '[6] ошибка авто-Продолжить' -ForegroundColor Yellow }
+
 Write-Host '=== Done. Logs: ~/.promptpilot/*.log ===' -ForegroundColor Cyan
