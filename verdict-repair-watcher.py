@@ -332,6 +332,54 @@ def try_repair(key: str, event: dict) -> None:
         log(f"  >>> без действий: вердикт «{choice}»/уверенность недостаточна — решение за человеком")
 
 
+
+
+SILENCE_LIMIT_SEC = 15 * 60
+GUARD_KILLS: dict[str, int] = {}
+MAX_GUARD_KILLS_PER_TASK = 2
+
+
+def silence_guard(state: dict) -> None:
+    """Задача running на codex-harness (mmx-m3), а rollout-сессия не пишет
+    ≥15 минут → процесс ждёт мёртвый сетевой ответ. Добиваем процесс:
+    воркер закроет задачу failed, вотчер авто-resume'ит (лимит 2/задача)."""
+    import glob
+    conn = db_connect()
+    try:
+        rows = conn.execute(
+            "SELECT id FROM tasks WHERE status='running' AND provider='mmx-m3'"
+        ).fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        return
+    files = sorted(
+        glob.glob("C:/Tools/codex-minimax/sessions/**/rollout-*.jsonl",
+                  recursive=True),
+        key=lambda p: os.path.getmtime(p))
+    if not files:
+        return
+    newest = files[-1]
+    age = time.time() - os.path.getmtime(newest)
+    if age < SILENCE_LIMIT_SEC:
+        return
+    for (task_id,) in rows:
+        guard_key = f"{task_id}"
+        if GUARD_KILLS.get(guard_key, 0) >= MAX_GUARD_KILLS_PER_TASK:
+            continue
+        import subprocess
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_Process -Filter \"Name='codex.exe'\" | "
+             "ForEach-Object { Stop-Process -Id $_.ProcessId -Force; $_.ProcessId }"],
+            capture_output=True, text=True, timeout=30)
+        killed = [x for x in out.stdout.split() if x.strip().isdigit()]
+        GUARD_KILLS[guard_key] = GUARD_KILLS.get(guard_key, 0) + 1
+        log(f"СТРАЖ: задача #{task_id} mmx-m3 молчит {int(age)//60} мин "
+            f"(сессия {os.path.basename(newest)[:40]}) → codex убит ({','.join(killed)}), "
+            f"воркер закроет задачу failed → следующий цикл даст timeout-style resume")
+
+
 def main() -> None:
     key = load_key()
     state = load_state()
@@ -372,6 +420,13 @@ def main() -> None:
             log(f"DB: {e}")
         except Exception as e:  # noqa: BLE001 — вотчер не должен умирать
             log(f"цикл: {type(e).__name__}: {e}")
+
+        # ── Страж тишины: codex-harness задача running, а сессия молчит ≥15 мин ──
+        try:
+            silence_guard(state)
+        except Exception as e:
+            log(f"страж: {type(e).__name__}: {e}")
+
         time.sleep(POLL_SECONDS)
 
 
