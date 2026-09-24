@@ -100,8 +100,11 @@ Write-Host '[6] Авто-Продолжить воркфлоу...' -ForegroundCo
 try {
     $wfs = Invoke-RestMethod 'http://127.0.0.1:8420/api/workflows' -TimeoutSec 5
     $resumed = @()
+    # Мёртвые пакеты: работа слита в main, worktree удалены — не будить
+    $dead = @('pkg-reverso-m2', 'pkg-backup-m3')
     foreach ($w in $wfs) {
         if ($w.status -ne 'awaiting_human') { continue }
+        if ($dead -contains $w.slug) { continue }
         try {
             Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8420/api/workflows/$($w.id)/human-input" -ContentType 'application/json' -Body (@{expected_version=$w.state_version; text='Продолжить работу с учётом сохранённого состояния'; resume=$true} | ConvertTo-Json) -TimeoutSec 15 | Out-Null
             $resumed += $w.slug

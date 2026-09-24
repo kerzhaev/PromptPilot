@@ -215,6 +215,12 @@ def resume_timeout(workflow_id: str, task_id: str) -> None:
     log(f"  >>> TIMEOUT-RESUME отправлен: задача #{task_id} продолжена без человека (раунд {wf_round})")
 
 
+DEAD_WORKFLOWS = {
+    'wf_874980f3fc3f40868777032da8f6bea1',  # pkg-reverso-m2 (слит в main)
+    'wf_84c029c14a82473c9b05876968819f19',  # pkg-backup-m3 (слит в main)
+}
+
+
 def try_repair(key: str, event: dict) -> None:
     """Обработать событие: потеря вердикта исполнителем/аудитором или таймаут."""
     payload = event.get("payload") or {}
@@ -232,6 +238,8 @@ def try_repair(key: str, event: dict) -> None:
     # (конфликты версий и т.п.) — не наша епархия.
     if event_type == "automation.paused" and "AUDIT" not in reason.upper() and "аудитор" not in reason.lower():
         return
+    if workflow_id in DEAD_WORKFLOWS:
+        return  # мёртвый воркфлоу: работа слита в main
     if task_id is None:
         return
 

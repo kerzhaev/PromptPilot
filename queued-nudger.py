@@ -7,8 +7,8 @@ from datetime import datetime
 # «resume-not-noticed») — этот хелпер делает это за него, пока идёт демо.
 WORKFLOWS = {
     "reader": "wf_1e0bd7a5cfb14d13a60c596e06c85fd9",
-    "reverso-m2": "wf_874980f3fc3f40868777032da8f6bea1",
-    "backup-m3": "wf_84c029c14a82473c9b05876968819f19",
+    # pkg-reverso-m2 / pkg-backup-m3: работа слита в main, воркфлоу мертвы —
+    # не будим (иначе бесконечный цикл фейлов на удалённых worktree)
 }
 
 
