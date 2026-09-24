@@ -375,6 +375,14 @@ def _remember_stream_session(task_id: int, line: str) -> None:
         db.set_session_id(task_id, session_id)
 
 
+# HOTFIX (bookapp): codex-harness провайдеры (MiniMax-M3) после события
+# task_complete могут НЕ закрывать stdout часами — воркер ждёт живой процесс,
+# задача висит "running", кредиты горят. Паттерн встречается регулярно
+# (2 из 2 запусков 2026-09-24). Флаг ставится потоком-читателем, главный
+# цикл poll увидит и завершит задачу штатно (полный выход уже в chunks).
+CODEX_TASK_COMPLETE_FLAG: dict[int, bool] = {}
+
+
 def _read_process_pipe(pipe, chunks: list[str], task_id: int | None = None) -> None:
     """Drain one provider pipe without blocking the cancellation poll loop."""
     try:
@@ -386,6 +394,15 @@ def _read_process_pipe(pipe, chunks: list[str], task_id: int | None = None) -> N
                 # и провайдер падал с os error 109. Чтение обязано продолжаться.
                 try:
                     _remember_stream_session(task_id, line)
+                except Exception:
+                    pass
+                # HOTFIX (bookapp #88 follow-up): codex "task_complete" получен,
+                # а пайп не закрывается провайдером — главный цикл завершит
+                # задачу сам, не дожидаясь зависшего процесса.
+                try:
+                    if '"task_complete"' in line and CODEX_TASK_COMPLETE_FLAG.get(task_id) is not True:
+                        CODEX_TASK_COMPLETE_FLAG[task_id] = True
+                        print(f"  -> HOTFIX: task_complete seen, provider did not close stdout")
                 except Exception:
                     pass
     finally:
@@ -867,6 +884,21 @@ def _execute_task_inner(task):
             proc.wait(timeout=2)
             break
         except subprocess.TimeoutExpired:
+            # HOTFIX (bookapp): провайдер выдал task_complete, но stdout не
+            # закрыл (codex-harness + MiniMax: процесс висит часами после
+            # завершения работы). Завершаем штатно: дерево добиваем, из
+            # chunks собирается полный выход, verdict-парсер работает как
+            # при обычном завершении.
+            if CODEX_TASK_COMPLETE_FLAG.pop(task.id, None) is True:
+                _stop_owned_process(tree)
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    pass
+                stdout_thread.join(timeout=10)
+                stderr_thread.join(timeout=10)
+                print("  -> HOTFIX: provider finished (task_complete) but did not close stdout; completing")
+                break  # выходим в штатную обработку выхода (как при proc.wait)
             if db.is_cancel_requested(task.id):
                 _stop_owned_process(tree)
                 try:
