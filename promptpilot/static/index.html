@@ -22,6 +22,21 @@
     --font: 'Inter', -apple-system, system-ui, sans-serif;
     --mono: 'JetBrains Mono', 'Fira Code', monospace;
   }
+  /* Светлая тема (GitHub-Light): те же переменные, светлые значения. */
+  body.theme-light {
+    --bg: #f5f6f8;
+    --surface: #ffffff;
+    --surface2: #eef0f3;
+    --border: #d9dde3;
+    --text: #1a1d21;
+    --text2: #5b616e;
+    --accent: #4c5fd5;
+    --accent2: #3b4fc0;
+    --green: #1a7f37;
+    --red: #cf222e;
+    --yellow: #9a6700;
+    --cyan: #0969da;
+  }
 
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -281,6 +296,26 @@
   .cz-label-sm { font-size: 11px; color: var(--text2); }
   .cz-hint { font-size: 11px; color: var(--text2); margin-left: auto; }
   .cz-inline { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+  .set-tabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 14px;
+  }
+  .set-tab {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text2);
+    padding: 8px 14px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .set-tab.active {
+    color: var(--text);
+    border-bottom-color: var(--accent);
+  }
+  .set-pane { min-height: 200px; }
   .task-schedule {
     font-size: 11px;
     color: var(--yellow);
@@ -730,6 +765,8 @@
     <button class="filter-btn" data-filter="failed">Failed</button>
     <button class="filter-btn" data-filter="rate_limited">Rate Limited</button>
     <button id="pauseBtn" class="btn-pause" onclick="toggleWorkerPause()" style="margin-left:auto">⏸ Pause</button>
+    <button class="btn-pause" onclick="openSettings()" style="margin-left:8px">⚙ Настройки</button>
+    <button class="btn-pause" id="themeBtn" onclick="toggleTheme()" style="margin-left:8px">☀ Светлая</button>
     <button class="btn-pause" onclick="openPipelines()" style="margin-left:8px">📈 Конвейеры</button>
     <button class="btn-pause" onclick="openSchedule()" style="margin-left:8px">🗓 Расписание</button>
     <button class="btn-pause" onclick="openWorkflows()" style="margin-left:8px">Workflows</button>
@@ -737,6 +774,39 @@
   </div>
 
   <div class="task-list" id="taskList"></div>
+</div>
+
+<div class="modal-overlay" id="settingsModal" onclick="if(event.target===this)closeSettings()">
+  <div class="modal" style="max-width:820px">
+    <h2>⚙ Настройки <button class="btn btn-sm btn-ghost" style="margin-left:auto" onclick="closeSettings()">Закрыть</button></h2>
+    <div class="set-tabs">
+      <button class="set-tab active" data-tab="appearance" onclick="setTab('appearance')">🎨 Оформление</button>
+      <button class="set-tab" data-tab="review" onclick="setTab('review')">🛡 Проверка кода</button>
+      <button class="set-tab" data-tab="helpers" onclick="setTab('helpers')">🤖 Помощники</button>
+    </div>
+
+    <div class="set-pane" id="set-appearance">
+      <p class="cz-hint" style="margin-bottom:10px">Тема применяется сразу и запоминается.</p>
+      <div class="cz-row">
+        <label class="cz-inline"><input type="radio" name="set-theme" value="dark" onchange="applyThemeChoice()"> 🌙 Тёмная</label>
+        <label class="cz-inline"><input type="radio" name="set-theme" value="light" onchange="applyThemeChoice()"> ☀ Светлая (белый фон, чёрный текст)</label>
+      </div>
+      <div class="cz-hint" style="margin-top:8px">Светлая палитра — GitHub-Light: белые карточки, мягкие границы, чёрный текст.</div>
+    </div>
+
+    <div class="set-pane" id="set-review" style="display:none">
+      <div class="cz-row">
+        <span class="cz-label">Воркфлоу:</span>
+        <select id="set-wf" class="cz-prov" onchange="setReviewLoad()" style="max-width:280px"></select>
+      </div>
+      <div id="set-review-body"><div class="cz-hint">Загрузка…</div></div>
+    </div>
+
+    <div class="set-pane" id="set-helpers" style="display:none">
+      <p class="cz-hint" style="margin-bottom:10px">Помощники — это разные модели ИИ. Настраиваются один раз (команды запуска и ключи — для опытных), назначаются на работу во вкладке «Проверка кода».</p>
+      <div id="set-helpers-list"></div>
+    </div>
+  </div>
 </div>
 
 <div class="modal-overlay" id="workflowModal" onclick="if(event.target===this)closeWorkflows()">
@@ -1057,6 +1127,172 @@ function wfSlugColor(slug) {
   let h = 0;
   for (let i = 0; i < slug.length; i++) h = (h * 31 + slug.charCodeAt(i)) % 360;
   return `hsl(${h}, 70%, 62%)`;
+}
+
+
+// ── ⚙ Настройки: единое окно (Оформление / Проверка кода / Помощники) ──
+
+function openSettings() { document.getElementById('settingsModal').classList.add('open'); setTab('appearance'); }
+function closeSettings() { document.getElementById('settingsModal').classList.remove('open'); }
+
+function setTab(name) {
+  document.querySelectorAll('.set-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.set-pane').forEach(p => p.style.display = p.id === 'set-' + name ? '' : 'none');
+  if (name === 'helpers') renderHelpersTab();
+  if (name === 'review') renderReviewTab();
+}
+
+// ── Тема ──
+function applyThemeChoice() {
+  const val = document.querySelector('input[name="set-theme"]:checked')?.value || 'dark';
+  document.body.classList.toggle('theme-light', val === 'light');
+  localStorage.setItem('pp-theme', val);
+  const btn = document.getElementById('themeBtn');
+  if (btn) btn.textContent = val === 'light' ? '🌙 Тёмная' : '☀ Светлая';
+}
+function toggleTheme() {
+  const cur = localStorage.getItem('pp-theme') || 'dark';
+  const next = cur === 'light' ? 'dark' : 'light';
+  localStorage.setItem('pp-theme', next);
+  document.body.classList.toggle('theme-light', next === 'light');
+  const btn = document.getElementById('themeBtn');
+  if (btn) btn.textContent = next === 'light' ? '🌙 Тёмная' : '☀ Светлая';
+  const radio = document.querySelector('input[name="set-theme"][value="' + next + '"]');
+  if (radio) radio.checked = true;
+}
+// Применить сохранённую тему сразу при загрузке страницы
+if (localStorage.getItem('pp-theme') === 'light') {
+  document.body.classList.add('theme-light');
+  document.addEventListener('DOMContentLoaded', () => {
+    const r = document.querySelector('input[name="set-theme"][value="light"]');
+    if (r) r.checked = true;
+    const btn = document.getElementById('themeBtn');
+    if (btn) btn.textContent = '🌙 Тёмная';
+  });
+}
+
+// ── Вкладка «Проверка кода»: пресеты + ступени ──
+let setReviewWf = null;
+let setReviewPresetPending = null;
+
+function renderReviewTab() {
+  const sel = document.getElementById('set-wf');
+  if (!sel.options.length) {
+    (workflowCache || []).forEach(w => {
+      const o = document.createElement('option');
+      o.value = w.id; o.textContent = w.slug;
+      sel.appendChild(o);
+    });
+  }
+  if (setReviewWf && [...sel.options].some(o => o.value === setReviewWf)) sel.value = setReviewWf;
+  setReviewLoad();
+}
+
+function setReviewLoad() {
+  setReviewWf = document.getElementById('set-wf').value;
+  const wf = (workflowCache || []).find(x => x.id === setReviewWf);
+  const body = document.getElementById('set-review-body');
+  if (!wf) { body.innerHTML = '<div class="cz-hint">Воркфлоу не найден.</div>'; return; }
+  const chain = (wf.config && wf.config.review_chain) || { enabled: false, steps: [] };
+  const steps = chain.steps || [];
+  let preset = 'custom';
+  if (!steps.length) preset = 'none';
+  else if (steps.length === 1 && steps[0].provider === 'goose-zai' && steps[0].fixer === 'self') preset = 'standard';
+  else if (steps.length === 2 && steps[1].provider === 'qwen-review') preset = 'strict';
+  const human = (pid) => {
+    const h = (providersData[pid] || {}).human || {};
+    return h.label || pid;
+  };
+  const executorHuman = wf.config?.roles?.executor?.provider
+    ? human(wf.config.roles.executor.provider) : '?';
+  const stepsHuman = steps.map((s, i) =>
+    `<div class="cz-row"><b>Ступень ${i + 1}:</b> ${esc(human(s.provider))}` +
+    ` · чинит: ${s.fixer === 'self' ? 'сам' : esc(human(s.fixer) || s.fixer)}` +
+    `${s.window ? ' · 🌙 ночное окно' : ''}</div>`).join('');
+  body.innerHTML = `
+    <div class="cz-row"><span class="cz-label">Кто пишет код:</span> <b>${executorHuman}</b></div>
+    <div class="cz-row" style="margin-top:8px"><span class="cz-label">Как проверяют код:</span></div>
+    <div class="cz-row">
+      <label class="cz-inline"><input type="radio" name="set-preset" value="standard" ${preset === 'standard' ? 'checked' : ''} onchange="setPreset('standard')"> 🛡 Обычная — проверяет и исправляет сам</label>
+    </div>
+    <div class="cz-row">
+      <label class="cz-inline"><input type="radio" name="set-preset" value="strict" ${preset === 'strict' ? 'checked' : ''} onchange="setPreset('strict')"> 🛡🛡 Строгая — двойная проверка (ГЛМ + Квен)</label>
+    </div>
+    <div class="cz-row">
+      <label class="cz-inline"><input type="radio" name="set-preset" value="none" ${preset === 'none' ? 'checked' : ''} onchange="setPreset('none')"> ⏭ Без проверки (быстро, только тесты)</label>
+    </div>
+    <div style="margin-top:8px" id="set-review-steps-preview"></div>
+    <details style="margin-top:8px"><summary class="cz-hint">▸ Дополнительные настройки (для опытных)</summary>
+      <div id="set-review-steps" style="margin-top:8px">${stepsHuman || '<div class="cz-hint">ступеней нет</div>'}</div>
+      <div class="cz-hint" style="margin-top:6px">Тонкая настройка ступеней — в карточке воркфлоу (⚙ Каскад ревью).</div>
+    </details>
+    <div class="cz-row" style="margin-top:10px">
+      <button class="btn btn-sm btn-primary" onclick="setReviewSave()">Сохранить</button>
+      <span class="cz-hint">действует с ближайшего диспетча</span>
+    </div>`;
+  body.dataset.preset = preset;
+  showPreview(preset);
+}
+
+function setPreset(name) {
+  const builders = {
+    standard: () => [{ slot: 1, provider: 'goose-zai', fixer: 'self', blocking: true, max_rounds: 2, on_exhaust: 'arbitrate_planner' }],
+    strict: () => [
+      { slot: 1, provider: 'goose-zai', fixer: 'self', blocking: true, max_rounds: 2, on_exhaust: 'arbitrate_planner' },
+      { slot: 2, provider: 'qwen-review', fixer: 'goose-zai', blocking: true, max_rounds: 3, on_exhaust: 'arbitrate_planner', window: { from: '22:00', to: '04:00', tz_offset_hours: 3 } },
+    ],
+    none: () => [],
+  };
+  const steps = (builders[name] || (() => []))();
+  const human = (pid) => (providersData[pid] || {}).human || {};
+  const lines = steps.map(s => `Ступень ${s.slot}: ${human(s.provider).label || s.provider}` +
+    (s.window ? ' (🌙 ночное окно)' : '')).join('<br>');
+  const prev = document.getElementById('set-review-steps-preview');
+  if (prev) prev.innerHTML = `<div class="cz-hint">Получится: ${lines || 'без ревью-ступеней'}</div>`;
+  setReviewPresetPending = { name, steps };
+}
+
+async function setReviewSave() {
+  const wfId = document.getElementById('set-wf').value;
+  const wf = (workflowCache || []).find(x => x.id === wfId);
+  if (!wf) { toast('Воркфлоу не найден'); return; }
+  const cfg = JSON.parse(JSON.stringify(wf.config));
+  if (setReviewPresetPending) {
+    cfg.review_chain = { enabled: setReviewPresetPending.name !== 'none', steps: setReviewPresetPending.steps };
+  }
+  try {
+    await fetchJSON(`${API}/workflows/${wfId}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config: cfg, expected_version: wf.state_version }),
+    });
+    toast('Проверка кода сохранена — действует с ближайшего диспетча.', false);
+    setReviewPresetPending = null;
+    await loadWorkflows();
+    renderReviewTab();
+  } catch (e) {
+    toast('Сохранение: ' + e.message);
+  }
+}
+
+// ── Вкладка «Помощники»: человеческие карточки над каталогом ──
+function renderHelpersTab() {
+  const list = document.getElementById('set-helpers-list');
+  const entries = Object.entries(providersData || {}).filter(([n, p]) => !p.hidden);
+  const roleLabel = { writer: 'пишет код', reviewer: 'проверяет код', planner: 'планирует', both: 'пишет и проверяет' };
+  list.innerHTML = entries.map(([name, p]) => {
+    const h = p.human || {};
+    const label = h.label || name;
+    const role = h.role ? (roleLabel[h.role] || h.role) : '';
+    return `<div class="cz-card">
+      <div class="cz-row">
+        <b>${esc(label)}</b>
+        ${role ? `<span class="cz-hint">· ${esc(role)}</span>` : ''}
+        ${p.available === false ? '<span class="cz-hint" style="color:var(--red)">· недоступен</span>' : ''}
+      </div>
+      ${h.desc ? `<div class="cz-hint">${esc(h.desc)}</div>` : ''}
+      <div class="cz-hint">технически: ${esc(name)}</div>
+    </div>`;
+  }).join('');
 }
 
 // ── Каскад ревью: визуальный редактор цепочки (config.review_chain) ──

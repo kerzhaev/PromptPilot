@@ -919,6 +919,9 @@ def api_providers():
             "hidden": bool(info.get("hidden")),
             "executor": info.get("executor", ""),
             "session_target": bool(info.get("session_target")),
+            # HOTFIX (bookapp): человеческий слой для UI настроек —
+            # необязательный блок из providers.json (label/role/desc).
+            "human": info.get("human", {}),
         }
         for name, info in providers.items()
     }
