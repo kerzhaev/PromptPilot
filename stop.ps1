@@ -37,7 +37,11 @@ function Add-PromptPilotTarget([string]$name, [int]$processId) {
     $looksLikePromptPilot =
         $command -match '(?i)-m\s+promptpilot\s+(worker|server|bot|flows)\b' -or
         ($command -match '(?i)[\\/]pp(?:\.exe)?["'']?\s+(worker|server|bot|flows)\b' -and
-         $command.IndexOf($PSScriptRoot, [StringComparison]::OrdinalIgnoreCase) -ge 0)
+         $command.IndexOf($PSScriptRoot, [StringComparison]::OrdinalIgnoreCase) -ge 0) -or
+        # Локальные надстройки развёртывания: контроллер ревью-цепочки и
+        # наблюдатель вердиктов запускаются как python-скрипты из этого checkout.
+        $command -match '(?i)cascade-review\.py' -or
+        $command -match '(?i)verdict-repair-watcher\.py'
     if (-not $looksLikePromptPilot) {
         Write-Host "Skip stale $name PID $processId (command is not PromptPilot)." -ForegroundColor Yellow
         return

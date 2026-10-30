@@ -1,4 +1,4 @@
-# Start PromptPilot services (worker + server + optional bot and flows)
+﻿# Start PromptPilot services (worker + server + optional bot and flows)
 # Usage:
 #   .\start.ps1           - worker + server
 #   .\start.ps1 -Bot      - worker + server + bot (requires PP_TG_TOKEN)
@@ -12,6 +12,18 @@ param(
 $ErrorActionPreference = "Stop"
 $pidFile = "$PSScriptRoot\.pp-pids.json"
 $logDir  = "$PSScriptRoot\logs"
+
+# P2-9: PP_DATA_DIR проверяется ДО старта процессов. Раньше молчаливый
+# пропуск/кривой путь включал сервер с пустой базой — миссии «исчезали»
+# (404) уже после успешного старта.
+if ($env:PP_DATA_DIR) {
+    if (-not (Test-Path -LiteralPath $env:PP_DATA_DIR -PathType Container)) {
+        Write-Host "PP_DATA_DIR='$env:PP_DATA_DIR' does not exist." -ForegroundColor Red
+        Write-Host "Create the directory or fix the variable before start; an empty DB turns missions into 404." -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "PP_DATA_DIR: $env:PP_DATA_DIR" -ForegroundColor DarkGray
+}
 
 # Load .env if present (same logic as config.py)
 $envFile = "$PSScriptRoot\.env"
@@ -90,6 +102,34 @@ if ($Bot -or $env:PP_TG_TOKEN) {
         $pids.bot = $b.Id
         Write-Host "  Bot     PID $($b.Id)   logs\bot.log" -ForegroundColor Green
     }
+}
+
+
+# Локальные надстройки развёртывания (не из upstream): контроллер ревью-цепочки
+# и наблюдатель вердиктов. Тот же venv, что и основной стек, — зависимости
+# promptpilot резолвятся из этого checkout.
+function Test-PromptPilotCommandLine([string]$Pattern) {
+    [bool](Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" |
+        Where-Object { $_.CommandLine -match $Pattern })
+}
+
+$addonPython = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
+if (-not (Test-Path $addonPython)) { $addonPython = "python" }
+
+$cascade = Start-Process $addonPython -ArgumentList @('-X', 'utf8', "$PSScriptRoot\cascade-review.py") `
+    -WorkingDirectory $PSScriptRoot -RedirectStandardOutput "$logDir\cascade-review.log" `
+    -RedirectStandardError "$logDir\cascade-review.err" -WindowStyle Hidden -PassThru
+$pids.cascade = $cascade.Id
+Write-Host "  Cascade PID $($cascade.Id)   logs\cascade-review.log" -ForegroundColor Green
+
+if (Test-PromptPilotCommandLine 'verdict-repair-watcher\.py') {
+    Write-Host "  Verdict watcher already running" -ForegroundColor DarkGray
+} else {
+    $watcher = Start-Process $addonPython.replace('python.exe','pythonw.exe') -ArgumentList @('-X', 'utf8', "$PSScriptRooterdict-repair-watcher.py") `
+        -WorkingDirectory $PSScriptRoot -RedirectStandardOutput "$logDirerdict-repair-watcher.stdout.log" `
+        -RedirectStandardError "$logDirerdict-repair-watcher.stderr.log" -WindowStyle Hidden -PassThru
+    $pids.verdict_watcher = $watcher.Id
+    Write-Host "  Verdict watcher PID $($watcher.Id)   logserdict-repair-watcher.stdout.log" -ForegroundColor Green
 }
 
 # Flows runner: only when there are flows to run.
